@@ -7,6 +7,11 @@ import re
 from langdetect import detect
 from roman import fromRoman
 from re import sub
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from math import ceil
+from time import perf_counter
+from deepdiff import DeepDiff
+
 
 def importData(filename, pattern = "\*\*\*\s"):
     '''
@@ -35,22 +40,23 @@ def importData(filename, pattern = "\*\*\*\s"):
     except Exception as e:
         return None
 
-def processData(sentList):
+def processData(sentList, time = False):
     '''
     1. Clean list
     2. Combine list
     3. Return a string of data
     TODO: Translate roman numerals to english numbers ✔
     TODO: Language detection - only english ✔
+    TODO: Currently adding period & semi-colon to punct removal; research ways to incorporate discontinuity
     '''
 
     def procPunct(sentence):
         '''
         Remove punctuations and special rules
         '''
-        return sub("(--)"," ",''.join([sub("(\n|\t|\r|\v|\f|,|\"|'|\*|\(|\)|\?)", "", word) for word in sentence]))
+        return sub("(--|-)"," ",''.join([sub("(\n|\t|\r|\v|\f|,|\"|'|\*|\(|\)|\?|\.|;|!|:)", "", word) for word in sentence]))
 
-    def process(sentence, romanStops):
+    def process(sentence):
         '''
         Macro holds all processing steps
         '''
@@ -75,16 +81,42 @@ def processData(sentList):
         '''
         return fromRoman(str)
 
-    def flattenAndCompress(sentence):
+    def flattenAndCompress(sentenceList):
         '''
         Remove spaces and None
         '''
-        return sentence.strip()
+        return [sentence.strip().replace("  "," ") for sentence in sentenceList if sentence]
 
-    romanStops = {'I':1,'V':5,'X':10,'L':50,'C':100,'D':500,'M':1000,'IV':4,'IX':9,'XL':40,'XC':90,'CD':400,'CM':900}
+    timeS = perf_counter()
     for idx, sentence in enumerate(sentList): #idx first
-        sentList[idx] = flattenAndCompress(process(sentence, romanStops))
+        sentList[idx] = process(sentence)
 
-    return sentList
+    sentList = flattenAndCompress(sentList)
+    if time:
+        return sentList, ceil(perf_counter() - timeS)
+    else:
+        return sentList
 
-print(processData(importData(".\\corpus\\edgar allen poe\\theFallOfTheHouseOfUsher.txt")))
+def parallelize(sentList, perSize = 200, time = False):
+    '''
+    Multi-processing port
+    '''
+
+    timeS = perf_counter()
+    with ThreadPoolExecutor() as executor:
+        result = executor.map(processData, [sentList[i*perSize:(i+1)*perSize] for i in range(ceil(sentList.__len__()/perSize))])
+        fOutput = [str for res in result for str in res]
+
+    if time:
+        return fOutput, perf_counter() - timeS
+    else:
+        return fOutput
+
+if __name__ == '__main__':
+    sentList = importData("./corpus/edgar allen poe/theFallOfTheHouseOfUsher.txt")
+    sentStringListP, timeP = parallelize(sentList, time=True)
+    sentStringListL, timeL = processData(sentList, time=True)
+    #checkDiff = DeepDiff(sentList,[SubL for List in [sentList[i * 300:(i + 1) * 300] for i in range(3)] for SubL in List])
+    checkDiff = DeepDiff(sentStringListP,sentStringListL)
+    if not checkDiff:
+        print(f"multiprocess took {timeL - timeP} seconds less")
